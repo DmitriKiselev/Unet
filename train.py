@@ -6,15 +6,15 @@ import sys
 import numpy as np
 import torch
 import torch.nn as nn
-
 from torch import optim
 from tqdm import tqdm
+
 from eval import eval_net
 from unet import UNet
+
 from torch.utils.tensorboard import SummaryWriter
 from utils.dataset import BasicDataset
 from torch.utils.data import DataLoader, random_split
-from torchvision import transforms
 
 dir_img = 'data/imgs/'
 dir_mask = 'data/masks/'
@@ -25,17 +25,10 @@ def train_net(net,
               device,
               epochs=5,
               batch_size=1,
-              lr=0.001,
-              val_percent=0.1,
+              lr=0.0001,
+              val_percent=0.2,
               save_cp=True,
               img_scale=0.5):
-
-    train_transforms = transforms.Compose([
-        transforms.RandomRotation(10),
-        transforms.ToTensor(),
-        transforms.Normalize
-        ((0.5, 0.5, 0.5),
-         (0.5, 0.5, 0.5))])
 
     dataset = BasicDataset(dir_img, dir_mask, img_scale)
     n_val = int(len(dataset) * val_percent)
@@ -46,7 +39,7 @@ def train_net(net,
 
     writer = SummaryWriter(comment=f'LR_{lr}_BS_{batch_size}_SCALE_{img_scale}')
     global_step = 0
-
+    iou = 0
     logging.info(f'''Starting training:
         Epochs:          {epochs}
         Batch size:      {batch_size}
@@ -101,13 +94,23 @@ def train_net(net,
                         tag = tag.replace('.', '/')
                         writer.add_histogram('weights/' + tag, value.data.cpu().numpy(), global_step)
                         writer.add_histogram('grads/' + tag, value.grad.data.cpu().numpy(), global_step)
-                    val_score= eval_net(net, val_loader, device)
+                    val_score = eval_net(net, val_loader, device)
                     scheduler.step(val_score[0])
-                    writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], global_step)
+                    writer.add_scalar('learning_rate',
+                                      optimizer.param_groups[0]['lr'],
+                                      global_step)
+
+                    if val_score[0]>iou:
+                        iou = val_score[0]
+                        torch.save(net.state_dict(),
+                                   dir_checkpoint + '{},{},{},{}.pth'.format(val_score[0]
+                                   , val_score[1], val_score[2], val_score[3]))
 
                     if net.n_classes > 1:
-                        logging.info('Validation cross entropy: {}'.format(val_score[0]))
-                        writer.add_scalar('Loss/test', val_score[0], global_step)
+                        logging.info('Validation cross entropy: {}'.format(
+                            val_score[0]))
+                        writer.add_scalar('Loss/test', val_score[0],
+                                          global_step)
                     else:
                         logging.info(
                             'Validation IoU Coeff: {}'.format(val_score[0]))
@@ -117,12 +120,9 @@ def train_net(net,
                             val_score[2]))
                         logging.info('Validation MaxF: {}'.format(
                             val_score[3]))
-                        writer.add_scalar('IoU/test', val_score[0], global_step)
+                        writer.add_scalar('IoU/test', val_score[0],
+                                          global_step)
 
-                    writer.add_images('images', imgs, global_step)
-                    if net.n_classes == 1:
-                        writer.add_images('masks/true', true_masks, global_step)
-                        writer.add_images('masks/pred', torch.sigmoid(masks_pred) > 0.5, global_step)
 
         if save_cp:
             try:
@@ -150,7 +150,7 @@ def get_args():
                         help='Load model from a .pth file')
     parser.add_argument('-s', '--scale', dest='scale', type=float, default=0.5,
                         help='Downscaling factor of the images')
-    parser.add_argument('-v', '--validation', dest='val', type=float, default=20.0,
+    parser.add_argument('-v', '--validation', dest='val', type=float, default=10.0,
                         help='Percent of the data that is used as validation (0-100)')
 
     return parser.parse_args()
